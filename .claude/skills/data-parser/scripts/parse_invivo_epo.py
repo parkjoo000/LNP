@@ -1,7 +1,7 @@
 """
 STEP 3 – data-parser: parse_invivo_epo.py
-Parses EPO ELISA plate reader CSV files (OD450 → concentration via standard curve).
-study_id is set to null; resolved by db-writer at STEP 6.
+Parses in-vivo EPO ELISA CSV files (SpectraMax, generic ELISA readers).
+Outputs normalized row list as step3 JSON.
 """
 
 import json
@@ -15,49 +15,46 @@ logger = logging.getLogger("parse-invivo-epo")
 ENCODINGS = ["utf-8", "cp949", "latin-1"]
 
 COLUMN_MAP = {
-    # Sample identifier
-    "well": "well",
-    "well id": "well",
+    # EPO concentration
+    "epo (pg/ml)": "epo_pg_ml",
+    "epo (ng/ml)": "_epo_ng_ml",   # will convert to pg/ml
+    "epo pg/ml": "epo_pg_ml",
+    "epo_pg_ml": "epo_pg_ml",
+    "conc (pg/ml)": "epo_pg_ml",
+    "concentration (pg/ml)": "epo_pg_ml",
+    "pg/ml": "epo_pg_ml",
+    "conc. (pg/ml)": "epo_pg_ml",
+    "epo": "epo_pg_ml",
+    # OD absorbance
+    "od 450": "od_450",
+    "od450": "od_450",
+    "absorbance at 450": "od_450",
+    "absorbance": "od_450",
+    "a450": "od_450",
+    # Sample / Well
+    "well": "well_id",
+    "well id": "well_id",
     "sample": "sample_id",
     "sample id": "sample_id",
     "sample name": "sample_id",
-    "id": "sample_id",
-    # OD / absorbance
-    "od 450": "od_450",
-    "od450": "od_450",
-    "od_450": "od_450",
-    "absorbance at 450": "od_450",
-    "absorbance (450 nm)": "od_450",
-    "absorbance": "od_450",
-    "a450": "od_450",
-    # Concentration
-    "concentration (pg/ml)": "epo_pg_ml",
-    "concentration pg/ml": "epo_pg_ml",
-    "epo (pg/ml)": "epo_pg_ml",
-    "epo pg/ml": "epo_pg_ml",
-    "conc (pg/ml)": "epo_pg_ml",
-    "conc. (pg/ml)": "epo_pg_ml",
-    "calc conc (pg/ml)": "epo_pg_ml",
-    "calculated concentration": "epo_pg_ml",
-    "pg/ml": "epo_pg_ml",
-    "ng/ml": "_ng_ml",  # converted to pg/ml on read
-    # Dilution factor
+    # Dilution
     "dilution factor": "dilution_factor",
     "dilution": "dilution_factor",
-    "dil factor": "dilution_factor",
-    "dil": "dilution_factor",
     # Animal / group
-    "animal id": "animal_id",
     "animal": "animal_id",
+    "animal id": "animal_id",
     "mouse": "animal_id",
+    "subject": "animal_id",
     "group": "group_label",
-    # Metadata
+    "treatment": "group_label",
+    "treatment group": "group_label",
+    # Timepoint
+    "timepoint": "timepoint",
+    "time point": "timepoint",
+    "day": "timepoint",
+    # Date / operator / notes
     "date": "_date",
     "time": "_time",
-    "datetime": "_datetime",
-    "timepoint": "timepoint_h",
-    "time point (h)": "timepoint_h",
-    "timepoint (h)": "timepoint_h",
     "operator": "operator",
     "analyst": "operator",
     "notes": "notes",
@@ -65,10 +62,10 @@ COLUMN_MAP = {
     "comments": "notes",
 }
 
-PRIMARY_KEYWORDS = {"od 450", "od450", "absorbance", "pg/ml", "ng/ml", "well", "concentration"}
+PRIMARY_KEYWORDS = {"od 450", "od450", "absorbance", "epo", "pg/ml", "ng/ml", "elisa", "well", "dilution"}
 
 
-def _find_header_row(lines):
+def _find_header_row(lines: list) -> int:
     for i, line in enumerate(lines[:30]):
         cells = [c.strip().lower() for c in line.split(",")]
         if any(kw in cell for cell in cells for kw in PRIMARY_KEYWORDS):
@@ -76,18 +73,11 @@ def _find_header_row(lines):
     return -1
 
 
-def _to_float(val):
+def _to_float(val: str):
     try:
-        return float(str(val).strip())
+        return float(str(val).strip().replace(",", ""))
     except (ValueError, AttributeError):
         return None
-
-
-def _parse_datetime(mapped):
-    dt_val = mapped.get("_datetime")
-    if dt_val:
-        return dt_val
-    return (f"{mapped.get('_date', '')} {mapped.get('_time', '')}").strip() or None
 
 
 def parse_invivo_epo(step2_json_path: str, tmp_dir: str) -> str:
@@ -123,9 +113,8 @@ def parse_invivo_epo(step2_json_path: str, tmp_dir: str) -> str:
         if not raw_line.strip():
             continue
         cells = [c.strip() for c in raw_line.split(",")]
-        if len(cells) < 2 or all(c == "" for c in cells):
+        if all(c == "" for c in cells):
             continue
-
         raw_row = dict(zip(raw_header, cells))
         mapped = {}
         for col_raw, val in raw_row.items():
@@ -133,45 +122,50 @@ def parse_invivo_epo(step2_json_path: str, tmp_dir: str) -> str:
             if key:
                 mapped[key] = val
 
-        record = {
+        # Handle ng/ml → pg/ml conversion
+        epo_raw = mapped.get("epo_pg_ml")
+        epo_ng = mapped.get("_epo_ng_ml")
+        if epo_ng is not None:
+            val = _to_float(epo_ng)
+            epo_raw = str(val * 1000) if val is not None else None
+            mapped["epo_pg_ml"] = epo_raw
+
+        epo_fval = None
+        if epo_raw:
+            epo_fval = _to_float(epo_raw)
+            if epo_fval is None and epo_raw != "":
+                parse_warnings.append(
+                    f"Row {row_num+1}: non-numeric epo_pg_ml='{epo_raw}'"
+                )
+
+        od_raw = mapped.get("od_450")
+        od_fval = _to_float(od_raw) if od_raw else None
+
+        dil_raw = mapped.get("dilution_factor")
+        dil_fval = _to_float(dil_raw) if dil_raw else None
+
+        measured_at = None
+        date_part = mapped.get("_date", "")
+        time_part = mapped.get("_time", "")
+        if date_part or time_part:
+            measured_at = f"{date_part} {time_part}".strip()
+
+        rows.append({
             "batch_id": batch_id,
-            "study_id": None,  # resolved at STEP 6
-            "measured_at": _parse_datetime(mapped),
+            "study_id": None,
+            "measured_at": measured_at,
+            "epo_pg_ml": epo_fval,
+            "od_450": od_fval,
+            "dilution_factor": dil_fval,
+            "well_id": mapped.get("well_id"),
+            "sample_id": mapped.get("sample_id"),
             "animal_id": mapped.get("animal_id"),
             "group_label": mapped.get("group_label"),
-            "well": mapped.get("well"),
-            "sample_id": mapped.get("sample_id"),
-            "dilution_factor": None,
-            "od_450": None,
-            "epo_pg_ml": None,
-            "timepoint_h": None,
+            "timepoint": mapped.get("timepoint"),
             "source_file": source_file,
             "operator": mapped.get("operator"),
             "notes": mapped.get("notes"),
-        }
-
-        for field in ("od_450", "epo_pg_ml", "dilution_factor", "timepoint_h"):
-            raw_val = mapped.get(field)
-            if raw_val is not None:
-                fval = _to_float(raw_val)
-                if fval is None and raw_val != "":
-                    parse_warnings.append(
-                        f"Row {row_num+1}: non-numeric value '{raw_val}' for '{field}'"
-                    )
-                record[field] = fval
-
-        # Convert ng/mL to pg/mL if epo_pg_ml still null
-        ng_ml_val = mapped.get("_ng_ml")
-        if ng_ml_val is not None and record["epo_pg_ml"] is None:
-            fval = _to_float(ng_ml_val)
-            if fval is not None:
-                record["epo_pg_ml"] = fval * 1000.0
-            elif ng_ml_val != "":
-                parse_warnings.append(
-                    f"Row {row_num+1}: non-numeric value '{ng_ml_val}' for 'ng/ml' column"
-                )
-
-        rows.append(record)
+        })
 
     if not rows:
         raise ValueError("PARSE_ERROR: no data rows found in invivo_epo CSV")
@@ -190,7 +184,7 @@ def parse_invivo_epo(step2_json_path: str, tmp_dir: str) -> str:
     with open(out_path, "w") as f:
         json.dump(result, f, indent=2)
 
-    logger.info("Parsed %d invivo_epo rows, %d warnings", len(rows), len(parse_warnings))
+    logger.info("Parsed %d EPO rows, %d warnings", len(rows), len(parse_warnings))
     return out_path
 
 

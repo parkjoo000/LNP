@@ -1,7 +1,7 @@
 """
 STEP 3 – data-parser: parse_toxicity.py
-Parses blood chemistry / toxicology CSV files (ALT, AST, BUN, creatinine, etc.)
-from Fuji DriChem, Hitachi 7180, VetScan, or generic exporters.
+Parses blood chemistry / toxicity CSV files (Fuji DriChem, Hitachi 7180, VetScan, generic).
+Outputs normalized row list as step3 JSON.
 """
 
 import json
@@ -16,52 +16,60 @@ ENCODINGS = ["utf-8", "cp949", "latin-1"]
 
 COLUMN_MAP = {
     # ALT
-    "alt": "alt_u_l",
-    "alt (u/l)": "alt_u_l",
     "alt(gpt)": "alt_u_l",
+    "alt (u/l)": "alt_u_l",
+    "alt": "alt_u_l",
     "alt/sgpt": "alt_u_l",
     "alanine aminotransferase": "alt_u_l",
     "alanine aminotransferase (u/l)": "alt_u_l",
     "sgpt": "alt_u_l",
-    "gpt": "alt_u_l",
     # AST
-    "ast": "ast_u_l",
-    "ast (u/l)": "ast_u_l",
     "ast(got)": "ast_u_l",
+    "ast (u/l)": "ast_u_l",
+    "ast": "ast_u_l",
     "ast/sgot": "ast_u_l",
     "aspartate aminotransferase": "ast_u_l",
     "aspartate aminotransferase (u/l)": "ast_u_l",
     "sgot": "ast_u_l",
-    "got": "ast_u_l",
     # BUN
     "bun": "bun_mg_dl",
     "bun (mg/dl)": "bun_mg_dl",
     "bun/urea": "bun_mg_dl",
     "blood urea nitrogen": "bun_mg_dl",
-    "blood urea nitrogen (mg/dl)": "bun_mg_dl",
     "urea nitrogen": "bun_mg_dl",
-    "urea (mg/dl)": "bun_mg_dl",
+    "urea": "bun_mg_dl",
     # Creatinine
     "creatinine": "creatinine_mg_dl",
-    "crea": "creatinine_mg_dl",
     "creatinine (mg/dl)": "creatinine_mg_dl",
+    "crea": "creatinine_mg_dl",
     "crea (mg/dl)": "creatinine_mg_dl",
-    # Animal / sample
-    "animal id": "animal_id",
+    # Total bilirubin
+    "total bilirubin": "tbil_mg_dl",
+    "tbil": "tbil_mg_dl",
+    "t.bil": "tbil_mg_dl",
+    "bilirubin": "tbil_mg_dl",
+    # Total protein
+    "total protein": "tp_g_dl",
+    "tp": "tp_g_dl",
+    "protein": "tp_g_dl",
+    # Albumin
+    "albumin": "alb_g_dl",
+    "alb": "alb_g_dl",
+    # WBC / CBC
+    "wbc": "wbc_10e3_ul",
+    "wbc (10^3/ul)": "wbc_10e3_ul",
+    # Sample / animal info
+    "sample": "sample_id",
+    "sample id": "sample_id",
     "animal": "animal_id",
+    "animal id": "animal_id",
     "mouse": "animal_id",
     "subject": "animal_id",
-    "sample": "animal_id",
-    "sample id": "animal_id",
-    "id": "animal_id",
     "group": "group_label",
-    # Metadata
+    "treatment": "group_label",
+    # Date / operator / notes
     "date": "_date",
     "time": "_time",
-    "datetime": "_datetime",
-    "timepoint": "timepoint_h",
-    "time point (h)": "timepoint_h",
-    "timepoint (h)": "timepoint_h",
     "operator": "operator",
     "analyst": "operator",
     "notes": "notes",
@@ -69,10 +77,11 @@ COLUMN_MAP = {
     "comments": "notes",
 }
 
-PRIMARY_KEYWORDS = {"alt", "ast", "bun", "alanine", "aspartate", "creatinine", "aminotransferase"}
+PRIMARY_KEYWORDS = {"alt", "ast", "bun", "creatinine", "crea", "liver", "kidney", "toxicology",
+                    "alanine", "aspartate", "urea", "sgpt", "sgot", "bilirubin"}
 
 
-def _find_header_row(lines):
+def _find_header_row(lines: list) -> int:
     for i, line in enumerate(lines[:30]):
         cells = [c.strip().lower() for c in line.split(",")]
         if any(kw in cell for cell in cells for kw in PRIMARY_KEYWORDS):
@@ -80,18 +89,11 @@ def _find_header_row(lines):
     return -1
 
 
-def _to_float(val):
+def _to_float(val: str):
     try:
-        return float(str(val).strip())
+        return float(str(val).strip().replace(",", ""))
     except (ValueError, AttributeError):
         return None
-
-
-def _parse_datetime(mapped):
-    dt_val = mapped.get("_datetime")
-    if dt_val:
-        return dt_val
-    return (f"{mapped.get('_date', '')} {mapped.get('_time', '')}").strip() or None
 
 
 def parse_toxicity(step2_json_path: str, tmp_dir: str) -> str:
@@ -122,14 +124,18 @@ def parse_toxicity(step2_json_path: str, tmp_dir: str) -> str:
     raw_header = [c.strip() for c in lines[header_idx].split(",")]
     data_lines = lines[header_idx + 1:]
 
+    NUMERIC_FIELDS = [
+        "alt_u_l", "ast_u_l", "bun_mg_dl", "creatinine_mg_dl",
+        "tbil_mg_dl", "tp_g_dl", "alb_g_dl", "wbc_10e3_ul",
+    ]
+
     rows = []
     for row_num, raw_line in enumerate(data_lines):
         if not raw_line.strip():
             continue
         cells = [c.strip() for c in raw_line.split(",")]
-        if len(cells) < 2 or all(c == "" for c in cells):
+        if all(c == "" for c in cells):
             continue
-
         raw_row = dict(zip(raw_header, cells))
         mapped = {}
         for col_raw, val in raw_row.items():
@@ -137,28 +143,38 @@ def parse_toxicity(step2_json_path: str, tmp_dir: str) -> str:
             if key:
                 mapped[key] = val
 
+        measured_at = None
+        date_part = mapped.get("_date", "")
+        time_part = mapped.get("_time", "")
+        if date_part or time_part:
+            measured_at = f"{date_part} {time_part}".strip()
+
         record = {
             "batch_id": batch_id,
-            "measured_at": _parse_datetime(mapped),
-            "animal_id": mapped.get("animal_id"),
-            "group_label": mapped.get("group_label"),
-            "timepoint_h": None,
+            "measured_at": measured_at,
             "alt_u_l": None,
             "ast_u_l": None,
             "bun_mg_dl": None,
             "creatinine_mg_dl": None,
+            "tbil_mg_dl": None,
+            "tp_g_dl": None,
+            "alb_g_dl": None,
+            "wbc_10e3_ul": None,
+            "sample_id": mapped.get("sample_id"),
+            "animal_id": mapped.get("animal_id"),
+            "group_label": mapped.get("group_label"),
             "source_file": source_file,
             "operator": mapped.get("operator"),
             "notes": mapped.get("notes"),
         }
 
-        for field in ("alt_u_l", "ast_u_l", "bun_mg_dl", "creatinine_mg_dl", "timepoint_h"):
+        for field in NUMERIC_FIELDS:
             raw_val = mapped.get(field)
             if raw_val is not None:
                 fval = _to_float(raw_val)
                 if fval is None and raw_val != "":
                     parse_warnings.append(
-                        f"Row {row_num+1}: non-numeric value '{raw_val}' for '{field}'"
+                        f"Row {row_num+1}: non-numeric '{raw_val}' for '{field}'"
                     )
                 record[field] = fval
 
