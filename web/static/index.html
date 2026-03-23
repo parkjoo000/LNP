@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LNP Data Pipeline</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #f4f6f9; color: #1a1a2e; }
+  header { background: #2e4057; color: #fff; padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; }
+  header h1 { font-size: 1.25rem; font-weight: 600; }
+  nav { display: flex; gap: 1rem; margin-left: auto; }
+  nav button { background: transparent; border: 1px solid #7ec8e3; color: #7ec8e3; padding: .35rem .85rem; border-radius: 4px; cursor: pointer; font-size: .875rem; }
+  nav button:hover, nav button.active { background: #7ec8e3; color: #2e4057; }
+  main { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+  section { display: none; }
+  section.active { display: block; }
+  .card { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.08); padding: 1.5rem; margin-bottom: 1.5rem; }
+  h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: #2e4057; }
+  .drop-zone { border: 2px dashed #7ec8e3; border-radius: 8px; padding: 2.5rem; text-align: center; cursor: pointer; transition: background .2s; }
+  .drop-zone:hover, .drop-zone.dragging { background: #e8f4f8; }
+  .drop-zone p { color: #555; font-size: .9rem; }
+  input[type=file] { display: none; }
+  .btn { display: inline-block; background: #2e4057; color: #fff; border: none; padding: .5rem 1.2rem; border-radius: 5px; cursor: pointer; font-size: .875rem; }
+  .btn:hover { background: #1e2d3e; }
+  .btn-sm { padding: .3rem .75rem; font-size: .8rem; }
+  .btn-outline { background: transparent; border: 1px solid #2e4057; color: #2e4057; }
+  .btn-outline:hover { background: #2e4057; color: #fff; }
+  #progress-box { background: #1a1a2e; color: #7ec8e3; font-family: monospace; font-size: .8rem; padding: 1rem; border-radius: 6px; min-height: 120px; max-height: 300px; overflow-y: auto; white-space: pre-wrap; margin-top: 1rem; display: none; }
+  table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+  th { background: #2e4057; color: #fff; padding: .5rem .75rem; text-align: left; }
+  td { padding: .45rem .75rem; border-bottom: 1px solid #e5e7eb; }
+  tr:hover td { background: #f0f4f8; }
+  .badge { display: inline-block; padding: .15rem .5rem; border-radius: 12px; font-size: .75rem; font-weight: 600; }
+  .badge-ok { background: #d1fae5; color: #065f46; }
+  .badge-warn { background: #fef3c7; color: #92400e; }
+  .badge-error { background: #fee2e2; color: #991b1b; }
+  pre.log { background: #f8f9fa; border: 1px solid #e5e7eb; padding: 1rem; border-radius: 6px; font-size: .78rem; overflow-x: auto; white-space: pre-wrap; max-height: 500px; overflow-y: auto; }
+  .empty { color: #888; font-size: .875rem; text-align: center; padding: 2rem; }
+  #result-detail { display: none; }
+  .flex { display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; }
+  select, input[type=text] { padding: .4rem .6rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: .875rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>LNP Data Pipeline</h1>
+  <nav>
+    <button class="active" onclick="showTab('upload')">Upload</button>
+    <button onclick="showTab('batches')">Batches</button>
+    <button onclick="showTab('logs')">Logs</button>
+    <button onclick="showTab('export')">Export</button>
+  </nav>
+</header>
+<main>
+
+  <!-- Upload -->
+  <section id="tab-upload" class="active">
+    <div class="card">
+      <h2>Upload CSV File</h2>
+      <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+        <p>Drop a CSV file here or click to browse</p>
+        <p style="margin-top:.5rem;font-size:.8rem;color:#888">Supported: physical, invivo_fluc, invivo_epo, toxicity</p>
+      </div>
+      <input type="file" id="file-input" accept=".csv">
+      <div id="progress-box"></div>
+    </div>
+  </section>
+
+  <!-- Batches -->
+  <section id="tab-batches">
+    <div class="card">
+      <div class="flex" style="margin-bottom:1rem">
+        <h2 style="margin:0">Batch Records</h2>
+        <button class="btn btn-sm" onclick="loadBatches()">Refresh</button>
+      </div>
+      <div id="batches-table"><div class="empty">Loading...</div></div>
+    </div>
+    <div class="card" id="result-detail">
+      <div class="flex" style="margin-bottom:1rem">
+        <h2 id="result-title" style="margin:0">Assay Results</h2>
+        <button class="btn btn-sm btn-outline" onclick="document.getElementById('result-detail').style.display='none'">Close</button>
+      </div>
+      <div id="result-tables"></div>
+    </div>
+  </section>
+
+  <!-- Logs -->
+  <section id="tab-logs">
+    <div class="card">
+      <div class="flex" style="margin-bottom:1rem">
+        <h2 style="margin:0">Run Logs</h2>
+        <button class="btn btn-sm" onclick="loadLogs()">Refresh</button>
+      </div>
+      <div id="logs-list"><div class="empty">Loading...</div></div>
+    </div>
+    <div class="card" id="log-viewer" style="display:none">
+      <div class="flex" style="margin-bottom:1rem">
+        <h2 id="log-filename" style="margin:0">Log</h2>
+        <button class="btn btn-sm btn-outline" onclick="document.getElementById('log-viewer').style.display='none'">Close</button>
+      </div>
+      <pre class="log" id="log-content"></pre>
+    </div>
+  </section>
+
+  <!-- Export -->
+  <section id="tab-export">
+    <div class="card">
+      <h2>Export Database to Excel</h2>
+      <p style="font-size:.875rem;color:#555;margin-bottom:1rem">
+        Generates a multi-sheet .xlsx workbook containing all tables from the LNP database.
+      </p>
+      <button class="btn" onclick="doExport()">Generate &amp; Download</button>
+      <p id="export-status" style="margin-top:.75rem;font-size:.875rem;color:#555"></p>
+    </div>
+  </section>
+
+</main>
+
+<script>
+function showTab(name) {
+  document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.target.classList.add('active');
+  if (name === 'batches') loadBatches();
+  if (name === 'logs') loadLogs();
+}
+
+// ── Upload / SSE ──────────────────────────────────────────────────────────────
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+const progressBox = document.getElementById('progress-box');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragging'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragging'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragging');
+  if (e.dataTransfer.files[0]) uploadFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) uploadFile(fileInput.files[0]); });
+
+async function uploadFile(file) {
+  progressBox.style.display = 'block';
+  progressBox.textContent = `Uploading ${file.name}...\n`;
+  const fd = new FormData();
+  fd.append('file', file);
+  let resp;
+  try {
+    resp = await fetch('/upload', { method: 'POST', body: fd });
+  } catch (e) {
+    progressBox.textContent += `ERROR: ${e}\n`;
+    return;
+  }
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    progressBox.textContent += `Upload failed: ${err.detail || resp.status}\n`;
+    return;
+  }
+  const { run_id } = await resp.json();
+  progressBox.textContent += `Run ID: ${run_id}\n`;
+  streamProgress(run_id);
+}
+
+function streamProgress(run_id) {
+  const es = new EventSource(`/progress/${run_id}`);
+  es.onmessage = e => {
+    try {
+      const data = JSON.parse(e.data);
+      const line = formatEvent(data);
+      progressBox.textContent += line + '\n';
+      progressBox.scrollTop = progressBox.scrollHeight;
+      if (data.event === 'done' || data.event === 'pipeline_complete' || data.event === 'timeout') {
+        es.close();
+      }
+    } catch (_) {}
+  };
+  es.onerror = () => { progressBox.textContent += '[stream closed]\n'; es.close(); };
+}
+
+function formatEvent(d) {
+  if (d.event === 'step_start') return `  → Step ${d.step} starting...`;
+  if (d.event === 'step_done') return `  ✓ Step ${d.step} done`;
+  if (d.event === 'pipeline_halted') return `  ✗ Pipeline halted: ${d.error || ''}`;
+  if (d.event === 'pipeline_complete') return `\n[${d.status}] rows_inserted=${d.rows_inserted} rows_skipped=${d.rows_skipped}\nLog: ${d.log_file}`;
+  if (d.event === 'done') return '--- stream ended ---';
+  return JSON.stringify(d);
+}
+
+// ── Batches ───────────────────────────────────────────────────────────────────
+async function loadBatches() {
+  const el = document.getElementById('batches-table');
+  el.innerHTML = '<div class="empty">Loading...</div>';
+  const batches = await fetch('/batches').then(r => r.json()).catch(() => []);
+  if (!batches.length) { el.innerHTML = '<div class="empty">No batches in database.</div>'; return; }
+  let html = '<table><thead><tr><th>Batch ID</th><th>Formulation ID</th><th>Date</th><th>Operator</th><th></th></tr></thead><tbody>';
+  batches.forEach(b => {
+    html += `<tr>
+      <td>${b.batch_id}</td>
+      <td>${b.formulation_id || '—'}</td>
+      <td>${b.preparation_date || '—'}</td>
+      <td>${b.operator || '—'}</td>
+      <td><button class="btn btn-sm" onclick="loadResults('${b.batch_id}')">Results</button></td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function loadResults(batch_id) {
+  document.getElementById('result-title').textContent = `Assay Results: ${batch_id}`;
+  const detail = document.getElementById('result-detail');
+  detail.style.display = 'block';
+  const data = await fetch(`/results/${batch_id}`).then(r => r.json()).catch(() => ({}));
+  const container = document.getElementById('result-tables');
+  const tables = Object.keys(data);
+  if (!tables.length) { container.innerHTML = '<div class="empty">No assay results found.</div>'; return; }
+  let html = '';
+  tables.forEach(tname => {
+    const rows = data[tname];
+    const cols = Object.keys(rows[0]);
+    html += `<h3 style="margin:.75rem 0 .4rem;font-size:.9rem;color:#555">${tname}</h3><div style="overflow-x:auto"><table><thead><tr>`;
+    cols.forEach(c => { html += `<th>${c}</th>`; });
+    html += '</tr></thead><tbody>';
+    rows.forEach(r => {
+      html += '<tr>';
+      cols.forEach(c => {
+        let val = r[c] === null || r[c] === undefined ? '—' : String(r[c]);
+        if (c === 'validation_flag' && val !== '—') {
+          try {
+            const flags = JSON.parse(val);
+            val = Object.entries(flags).map(([k, v]) => {
+              const cls = v === 'OK' ? 'ok' : v.startsWith('WARN') ? 'warn' : 'error';
+              return `<span class="badge badge-${cls}">${k}: ${v}</span>`;
+            }).join(' ');
+          } catch (_) {}
+        }
+        html += `<td>${val}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+  });
+  container.innerHTML = html;
+  detail.scrollIntoView({ behavior: 'smooth' });
+}
+
+// ── Logs ──────────────────────────────────────────────────────────────────────
+async function loadLogs() {
+  const el = document.getElementById('logs-list');
+  el.innerHTML = '<div class="empty">Loading...</div>';
+  const files = await fetch('/logs').then(r => r.json()).catch(() => []);
+  if (!files.length) { el.innerHTML = '<div class="empty">No log files found.</div>'; return; }
+  let html = '<table><thead><tr><th>Log File</th><th></th></tr></thead><tbody>';
+  files.slice().reverse().forEach(f => {
+    html += `<tr><td>${f}</td><td><button class="btn btn-sm" onclick="viewLog('${f}')">View</button></td></tr>`;
+  });
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function viewLog(filename) {
+  const data = await fetch(`/logs/${encodeURIComponent(filename)}`).then(r => r.json()).catch(() => null);
+  if (!data) return;
+  document.getElementById('log-filename').textContent = data.filename;
+  document.getElementById('log-content').textContent = data.content;
+  const viewer = document.getElementById('log-viewer');
+  viewer.style.display = 'block';
+  viewer.scrollIntoView({ behavior: 'smooth' });
+}
+
+// ── Export ────────────────────────────────────────────────────────────────────
+async function doExport() {
+  const status = document.getElementById('export-status');
+  status.textContent = 'Generating export…';
+  try {
+    const resp = await fetch('/export', { method: 'POST' });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      status.textContent = `Error: ${err.detail || resp.status}`;
+      return;
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const cd = resp.headers.get('content-disposition') || '';
+    const m = cd.match(/filename="?([^"]+)"?/);
+    a.download = m ? m[1] : 'lnp_export.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
+    status.textContent = 'Download started.';
+  } catch (e) {
+    status.textContent = `Error: ${e}`;
+  }
+}
+</script>
+</body>
+</html>
