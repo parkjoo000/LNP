@@ -1,0 +1,73 @@
+# Numeric range validation rules for LNP assay results
+# Applied at STEP 5 (db-validator/scripts/validate_range.py)
+#
+# Format per field:
+#   min: absolute minimum (values below → ERROR flag)
+#   max: absolute maximum (values above → ERROR flag)
+#   unit: display unit for flag messages
+#   warn_threshold: optional; values above this (but within min/max) → WARN flag
+#   warn_only: if true, even out-of-range values get WARN not ERROR (insert proceeds)
+
+AssayResults_Physical:
+  z_avg_nm:
+    min: 10
+    max: 1000
+    unit: nm
+    warn_threshold: 200
+    warn_only: true
+  pdi:
+    min: 0.0
+    max: 1.0
+    unit: dimensionless
+    warn_threshold: 0.3
+    warn_only: true
+  zeta_potential_mv:
+    min: -100
+    max: 100
+    unit: mV
+    warn_only: true
+  ee_percent:
+    min: 0
+    max: 100
+    unit: percent
+    warn_threshold: 50
+    warn_only: true
+  concentration_mg_ml:
+    min: 0.001
+    max: 50
+    unit: mg/mL
+    warn_only: true
+
+Toxicity:
+  ast_u_l:
+    min: 0
+    max: 5000
+    unit: U/L
+    warn_threshold: 200
+    warn_only: true
+  alt_u_l:
+    min: 0
+    max: 5000
+    unit: U/L
+    warn_threshold: 100
+    warn_only: true
+  bun_mg_dl:
+    min: 0
+    max: 200
+    unit: mg/dL
+    warn_threshold: 30
+    warn_only: true
+
+InVivo_FLUC:
+  fluc_total_flux:
+    min: 0
+    max: 1.0e15
+    unit: p/s
+    warn_only: true
+
+InVivo_EPO:
+  epo_pg_ml:
+    min: 0
+    max: 100000
+    unit: pg/mL
+    warn_only: true

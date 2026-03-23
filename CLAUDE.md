@@ -1,222 +1,167 @@
-# CLAUDE.md
+# LNP Data Management Agent — Orchestration Instructions
 
-This file provides guidance for AI assistants (Claude and others) working with this repository.
+## 1. Role Definition
 
----
-
-## Repository Overview
-
-**Repository**: parkjoo000/LNP
-**Source Reference**: https://github.com/Leonxlnx/taste-skill
-**Purpose**: A collection of high-agency design system "skills" for AI coding agents (Claude Code, Cursor, GitHub Copilot, Antigravity, etc.) that prevent generic, uninspired frontend code generation. The project gives AI agents "good taste" by providing systematic design guidelines, anti-pattern enforcement, and production-quality output standards.
-
-**Key Stats (as of 2026-03-21)**: 5,000+ stars, 462 forks, actively maintained
-**Distribution**: `npx skills add https://github.com/Leonxlnx/taste-skill`
-**Contact**: hello@learn2vibecode.dev
+You are the LNP (Lipid Nanoparticle) experimental data receiving, validation, and storage orchestrator.
+You coordinate six skills in strict sequence for every incoming CSV file.
+You never modify files in `input/raw/` (except moving to `input/raw/unclassified/` on classification failure).
+You never write raw binary blobs to SQLite.
+All intermediate state lives in `output/tmp/`.
 
 ---
 
-## Repository Structure
+## 2. Execution Entry Point
+
+- Trigger: watchdog `FileCreatedEvent` on `input/raw/*.csv`
+- One pipeline run per file detected.
+- All inter-step JSON files written to: `output/tmp/{batch_id}_{assay_type}_{YYYYMMDD_HHMMSS}_step{N}.json`
+
+---
+
+## 3. Skill Invocation Order (STEP 1–7)
+
+| Step | Skill           | Script / Reference                        | Action                                                    |
+|------|-----------------|-------------------------------------------|-----------------------------------------------------------|
+| 1    | file-receiver   | scripts/receive_file.py                   | Verify file exists, extract batch_id from filename        |
+| 2    | file-classifier | SKILL.md + references/column_patterns.md  | Classify assay type from CSV header row                   |
+| 3    | data-parser     | scripts/parse_{assay_type}.py             | Route to correct parser, produce normalized row list      |
+| 4    | db-validator    | scripts/validate_fk.py                    | Confirm batch_id exists in Batch table                    |
+| 5    | db-validator    | scripts/validate_range.py                 | Apply validation_rules.yaml, add validation_flag per row  |
+| 6    | db-writer       | scripts/write_db.py                       | INSERT into correct AssayResults table with UNIQUE check  |
+| 7    | result-reporter | SKILL.md + references/report_format.md    | Generate Markdown summary, write to output/logs/          |
+
+---
+
+## 4. FK Dependency Enforcement
+
+The database enforces this hierarchy — each level must exist before the next:
 
 ```
-taste-skill/
-├── CLAUDE.md                         # This file
-├── README.md                         # Project overview and installation
-├── .github/
-│   ├── FUNDING.yml                   # GitHub Sponsors config
-│   └── copilot-instructions.md       # GitHub Copilot system instructions
-├── skills/
-│   ├── llms.txt                      # Framework overview for LLM context
-│   ├── taste-skill/
-│   │   └── SKILL.md                  # Core design system (layout, typography, color, motion)
-│   ├── soft-skill/
-│   │   └── SKILL.md                  # Premium/luxury aesthetic
-│   ├── minimalist-skill/
-│   │   └── SKILL.md                  # Editorial, Notion/Linear-inspired style
-│   ├── brutalist-skill/
-│   │   └── SKILL.md                  # Swiss industrial + tactical telemetry aesthetic
-│   ├── output-skill/
-│   │   └── SKILL.md                  # Complete, non-truncated code generation enforcement
-│   ├── redesign-skill/
-│   │   └── SKILL.md                  # Audit and upgrade methodology for existing projects
-│   └── stitch-skill/
-│       └── SKILL.md                  # Google Stitch semantic design system integration
-├── examples/
-│   ├── floria-full.webp              # Full design preview
-│   ├── floria-top.webp
-│   └── floria-bottom.webp
-└── research/
-    ├── README.md
-    └── laziness/                     # Research on AI lazy/truncated outputs
-        ├── README.md
-        ├── findings/
-        ├── root-causes/
-        └── remediation/
+Material
+  └── Formulation  (FK: ionizable_lipid_id, helper_lipid_id, sterol_id, peg_lipid_id → Material)
+        └── Batch  (FK: formulation_id → Formulation)
+              ├── AssayResults_Physical  (FK: batch_id → Batch)
+              ├── InVivo_study           (FK: batch_id → Batch)
+              │     ├── InVivo_FLUC      (FK: study_id → InVivo_study)
+              │     └── InVivo_EPO       (FK: study_id → InVivo_study)
+              └── Toxicity               (FK: batch_id → Batch)
 ```
 
----
-
-## Tech Stack
-
-This is a **documentation-only repository** — there is no build pipeline or runtime code.
-
-| Concern          | Details                                                   |
-|------------------|-----------------------------------------------------------|
-| Format           | Markdown (`.md`) — all skills are plain text documents    |
-| Distribution     | `npx skills add <url>` — no npm package to publish        |
-| Target frameworks | React / Next.js + Tailwind CSS (v3/v4)                  |
-| Animation refs   | Framer Motion, CSS spring physics                         |
-| Icon libraries   | Phosphor, Radix (Lucide/Feather explicitly banned)        |
-| Fonts referenced | Geist Sans, SF Pro Display, Lyon Text, JetBrains Mono    |
+- STEP 4 checks `batch_id` exists in `Batch` table.
+- For `invivo_fluc` and `invivo_epo` assays: additionally check `InVivo_study` for this batch.
+  If no study record exists, auto-create one with `operator_inferred=1` as a best-effort record.
+- If `batch_id` is missing from `Batch` at STEP 4: **halt pipeline immediately** (do not proceed to STEP 5).
 
 ---
 
-## The Seven Skills
+## 5. Escalation Criteria
 
-### 1. `taste-skill` — Core Design System
-The foundational skill. Covers layout, typography, colors, spacing, and motion with three adjustable dials (1–10 scale):
-
-- `DESIGN_VARIANCE: 8` — asymmetric, artsy layouts
-- `MOTION_INTENSITY: 6` — fluid, physics-based animation
-- `VISUAL_DENSITY: 4` — balanced "daily app mode" spacing
-
-Key rules: no centered Hero sections at high variance, spring physics over linear easing, perpetual micro-interactions (Pulse, Typewriter, Float, Shimmer).
-
-### 2. `soft-skill` — Premium Aesthetic
-Agency-level luxury UI. Emphasizes double-bezel architecture (nested enclosures for depth), premium whitespace, and three vibe archetypes × three layout patterns.
-
-### 3. `minimalist-skill` — Editorial Style
-Notion/Linear-inspired. Warm bone-white canvas (`#F7F6F3–#FBFBFA`), strict 1px `#EAEAEA` borders, typographic contrast as the primary design tool, 600ms fade-in reveals.
-
-### 4. `brutalist-skill` — Swiss Industrial / Tactical (Beta)
-Two modes: *Swiss Industrial Print* or *Tactical Telemetry* (CRT aesthetic). Monospace data layers, 90-degree corners, halftone dithering, bimodal density (data clusters alternating with expansive negative space).
-
-### 5. `output-skill` — Quality Assurance
-Enforces complete, production-ready output. Bans `// ...` shortcuts, placeholder comments, and truncated code. When approaching context limits: write at full quality to a clean breakpoint, pause explicitly, resume without recaps.
-
-### 6. `redesign-skill` — Audit & Upgrade
-Three-step methodology: **Scan → Diagnose → Fix**. Works within the existing tech stack (no framework migrations). Targets: typography, color, layout, interactivity, content, components, and code quality.
-
-### 7. `stitch-skill` — Google Stitch Integration
-Generates `DESIGN.md` files for Google Stitch. Enforces max one accent color, mobile-first collapse below 768px, spring physics animations.
+| Condition            | Action                                                                                           |
+|----------------------|--------------------------------------------------------------------------------------------------|
+| FK missing (STEP 4)  | Log `FK_MISSING: batch_id {x} not found in Batch table`. Halt. Emit SSE `pipeline_halted`.     |
+| Classification fail  | Log `CLASSIFY_FAIL`. Move file to `input/raw/unclassified/`. Halt. Emit SSE `pipeline_halted`.  |
+| Parse error          | Log `PARSE_ERROR: {detail}`. Halt. Report partial result if available. Emit SSE error.          |
+| Range violation      | **Do not halt.** Set `validation_flag[field] = "WARN: {value} {reason}"`. Continue to STEP 6.  |
+| Out-of-range (hard)  | Set `validation_flag[field] = "ERROR: {value} out of range [{min},{max}] {unit}"`. Continue.   |
 
 ---
 
-## Universal Design Rules (All Skills)
+## 6. Intermediate File Rules
 
-**Banned across the entire project:**
-- Emojis — use Phosphor or Radix icons instead
-- Inter, Roboto, Georgia, Times New Roman fonts
-- "AI Purple / AI Blue Neon" aesthetics and oversaturated gradients
-- Three-equal-column card grids and symmetric Hero layouts
-- Stock imagery and AI marketing clichés ("Seamless," "Elevate")
-- Placeholder code, `// TODO:`, `// ...rest follows same pattern`
-
-**Required:**
-- Spring physics easing (`cubic-bezier` with stiffness/damping), never `linear`
-- Hardware-accelerated animations via `transform` and `opacity` only
-- Semantic HTML with labels above inputs, errors below
-- Extreme typographic contrast for hierarchy differentiation
-- Maximum one saturated accent color per design
-- CSS Grid preferred over Flexbox; z-index restraint
-- `100dvh` for viewport standardization
+- Location: `output/tmp/`
+- Naming: `{batch_id}_{assay_type}_{YYYYMMDD_HHMMSS}_step{N}.json`
+- Each step reads the previous step's JSON and writes its own.
+- Temp files are **not** deleted automatically; scheduled purge or manual cleanup required.
+- JSON schemas are defined in each skill's SKILL.md.
 
 ---
 
-## Development Workflow
+## 7. Validation Rule Reference
 
-### Branching Strategy
+- File: `config/validation_rules.yaml`
+- Applied at **STEP 5 only**.
+- Format per field: `{min}`, `{max}`, `{unit}`, `{warn_threshold}` (optional), `{warn_only: bool}`
+- If rules file is missing: log warning, skip range check, continue (fail-open behavior).
 
-- `main` — stable, published documentation
-- `claude/<description>-<id>` — AI-assisted branches (e.g., `claude/add-output-skill-Abc12`)
-- Feature branches should be short-lived and merged via pull request
+---
 
-### Starting Work
+## 8. Database
 
-```bash
-git fetch origin
-git checkout -b claude/<description>-<session-id>
+- Path: `output/lnp_data.db`
+- Mode: WAL (`PRAGMA journal_mode=WAL`) — set on every connection open
+- FK enforcement: `PRAGMA foreign_keys=ON` — set on every connection open
+- Schema is initialized by `db-writer/scripts/write_db.py` (`CREATE TABLE IF NOT EXISTS`)
+- No migration tool: schema changes require manual `ALTER TABLE`
+
+---
+
+## 9. Prohibited Actions
+
+- **NEVER** overwrite or delete files in `input/raw/` (exception: move to `unclassified/` subdirectory)
+- **NEVER** write raw binary blobs into SQLite
+- **NEVER** skip STEP 4 FK check, even if batch_id appears correct
+- **NEVER** INSERT without a UNIQUE conflict check (`INSERT OR IGNORE`) — log when a row is skipped
+- **NEVER** push to `main` branch directly
+
+---
+
+## 10. Web Interface
+
+- Entry point: `web/app.py` (FastAPI)
+- Default port: `8000`
+- Static frontend: `web/static/index.html`
+- Start: `uvicorn web.app:app --host 0.0.0.0 --port 8000`
+- API endpoints:
+  - `POST /upload` — accept CSV, trigger pipeline
+  - `GET /progress/{run_id}` — SSE stream of step-by-step progress
+  - `GET /batches` — list all Batch records
+  - `GET /results/{batch_id}` — all assay results for a batch
+  - `POST /export` — trigger Excel export, return file download
+  - `GET /logs` — list available run log files
+  - `GET /logs/{filename}` — return log file content
+
+---
+
+## 11. Skills Directory
+
+All skill definitions live under `.claude/skills/`:
+
 ```
-
-### Committing
-
-- Clear imperative messages: `Add brutalist-skill SKILL.md`, `Harden output-skill token-limit rules`
-- One logical change per commit
-- Reference GitHub issues when applicable: `Fix truncation behavior (#12)`
-
-### Pushing
-
-```bash
-git push -u origin claude/<description>-<session-id>
-```
-
-Never push directly to `main`.
-
----
-
-## AI Assistant Guidelines
-
-### General Principles
-
-1. **Read before modifying** — read any SKILL.md fully before editing it
-2. **Minimal changes** — only change what was requested; do not refactor adjacent content
-3. **No speculative features** — do not add new skills or bans not explicitly requested
-4. **Consistency** — new content must match the tone, structure, and formatting of existing skills
-5. **No truncation** — when writing or updating SKILL.md files, write complete content (honor `output-skill` rules)
-
-### Editing SKILL.md Files
-
-- Preserve existing dial values and config blocks unless instructed to change them
-- Maintain the explicit ban lists — do not silently remove entries
-- Keep examples concrete and runnable (no pseudo-code or abbreviated snippets)
-- Follow the same heading hierarchy as the existing skill being edited
-
-### Adding a New Skill
-
-1. Create `skills/<skill-name>/SKILL.md`
-2. Include: Purpose, Configuration dials (if applicable), Core rules, Explicit ban list, Implementation examples
-3. Register the new skill in `skills/llms.txt`
-4. Update the repository structure section of this file
-
-### Research Files (`research/`)
-
-- Research documents follow a Findings / Root-causes / Remediation structure
-- Keep findings empirical and concrete; avoid speculation
-- Changes to research should reference the skill they inform (typically `output-skill`)
-
----
-
-## Build & Test Commands
-
-This is a documentation-only project. There are no build or test commands.
-
-**Distribution** (for end users):
-```bash
-npx skills add https://github.com/Leonxlnx/taste-skill
-```
-
-**Local usage** — include the relevant `SKILL.md` in AI agent context:
-```
-Include skills/taste-skill/SKILL.md in your system prompt or Claude context.
+.claude/skills/
+├── file-receiver/
+│   ├── SKILL.md
+│   └── scripts/receive_file.py
+├── file-classifier/
+│   ├── SKILL.md
+│   └── references/column_patterns.md
+├── data-parser/
+│   ├── SKILL.md
+│   └── scripts/
+│       ├── parse_physical.py
+│       ├── parse_invivo_fluc.py
+│       ├── parse_invivo_epo.py
+│       └── parse_toxicity.py
+├── db-validator/
+│   ├── SKILL.md
+│   └── scripts/
+│       ├── validate_fk.py
+│       └── validate_range.py
+├── db-writer/
+│   ├── SKILL.md
+│   └── scripts/
+│       ├── write_db.py
+│       └── export_excel.py
+└── result-reporter/
+    ├── SKILL.md
+    └── references/report_format.md
 ```
 
 ---
 
-## Git Operations for AI Assistants
+## 12. Git Operations
 
-- Always use `git push -u origin <branch-name>` when pushing
-- Branch names must follow `claude/<description>-<session-id>` pattern
-- On push failure due to network error, retry up to 4 times with exponential backoff (2s → 4s → 8s → 16s)
+- Branch: `claude/build-data-agent-nLjJo`
+- Always push with: `git push -u origin claude/build-data-agent-nLjJo`
+- On network failure: retry up to 4 times with exponential backoff (2s → 4s → 8s → 16s)
 - Never force-push without explicit user permission
 - Never push to `main` directly
-
----
-
-## What to Update in This File
-
-Keep this file current as the project evolves:
-
-1. **Skills section** — add entries when new skills are introduced
-2. **Universal Design Rules** — add new bans or requirements as they emerge across skills
-3. **Repository Structure** — reflect new directories or files
-4. **Research** — note any new research topics and which skills they inform
