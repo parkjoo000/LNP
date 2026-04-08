@@ -1,0 +1,12 @@
+Experiment: LNP-X1 In Vivo Efficacy Study
+Date: 25-Mar-2026
+Instrument: IVIS Spectrum
+Software: Living Image 4.7.3
+Route: IV, Dose: 0.5 mg/kg mRNA
+
+Image,ROI,Total Flux [p/s],Average Radiance [p/s/cm²/sr],Min Radiance,Max Radiance,Area [cm²],Subject,Group,Timepoint,Date,Operator
+Image1,ROI 1,4.58E+08,2.34E+07,1.12E+06,8.92E+07,19.6,Mouse_01,LNP-X1,6h,2026-03-25,Lee
+Image1,ROI 2,3.21E+08,1.87E+07,9.45E+05,6.73E+07,17.2,Mouse_02,LNP-X1,6h,2026-03-25,Lee
+Image1,ROI 3,2.87E+08,1.52E+07,8.11E+05,5.44E+07,18.9,Mouse_03,LNP-X1,6h,2026-03-25,Lee
+Image2,ROI 1,8.92E+06,4.56E+05,2.31E+04,1.54E+06,19.6,Mouse_04,PBS,6h,2026-03-25,Lee
+Image2,ROI 2,7.43E+06,3.89E+05,1.97E+04,1.28E+06,17.2,Mouse_05,PBS,6h,2026-03-25,Lee

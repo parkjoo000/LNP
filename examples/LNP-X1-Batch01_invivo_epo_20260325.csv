@@ -1,0 +1,18 @@
+Plate ID: EPO-ELISA-20260325
+Assay: Human Erythropoietin (EPO) ELISA Kit
+Instrument: SpectraMax i3x
+Wavelength: 450 nm / 570 nm (reference)
+Date: 25-Mar-2026
+
+Well,Sample,Dilution Factor,OD 450,Corrected OD,Concentration (pg/mL),Animal ID,Group,Timepoint,Date,Operator
+A1,Standard_5000,1,2.105,2.048,5000.0,,Standard,,,Lee
+A2,Standard_2500,1,1.532,1.475,2500.0,,Standard,,,Lee
+A3,Standard_1250,1,0.978,0.921,1250.0,,Standard,,,Lee
+A4,Standard_625,1,0.612,0.555,625.0,,Standard,,,Lee
+A5,Standard_312,1,0.401,0.344,312.5,,Standard,,,Lee
+A6,Standard_0,1,0.057,0.000,0.0,,Standard,,,Lee
+B1,LNP-X1-Batch01_M01,10,1.234,1.177,2845.3,Mouse_01,LNP-X1,24h,2026-03-25,Lee
+B2,LNP-X1-Batch01_M02,10,1.089,1.032,2412.8,Mouse_02,LNP-X1,24h,2026-03-25,Lee
+B3,LNP-X1-Batch01_M03,10,1.156,1.099,2601.5,Mouse_03,LNP-X1,24h,2026-03-25,Lee
+C1,PBS_M04,10,0.234,0.177,125.4,Mouse_04,PBS,24h,2026-03-25,Lee
+C2,PBS_M05,10,0.198,0.141,98.7,Mouse_05,PBS,24h,2026-03-25,Lee
