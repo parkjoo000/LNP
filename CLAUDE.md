@@ -1,167 +1,95 @@
-# LNP Data Management Agent — Orchestration Instructions
+# CLAUDE.md
 
-## 1. Role Definition
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-You are the LNP (Lipid Nanoparticle) experimental data receiving, validation, and storage orchestrator.
-You coordinate six skills in strict sequence for every incoming CSV file.
-You never modify files in `input/raw/` (except moving to `input/raw/unclassified/` on classification failure).
-You never write raw binary blobs to SQLite.
-All intermediate state lives in `output/tmp/`.
+## Project Overview
 
----
+LNP (Lipid Nanoparticle) experimental data pipeline: receives CSV files from lab instruments, classifies the assay type, parses/normalizes data, validates against the database and numeric rules, stores results in SQLite, and generates Markdown run reports. A FastAPI web UI provides upload, progress streaming (SSE), data browsing, and Excel export.
 
-## 2. Execution Entry Point
+## Commands
 
-- Trigger: watchdog `FileCreatedEvent` on `input/raw/*.csv`
-- One pipeline run per file detected.
-- All inter-step JSON files written to: `output/tmp/{batch_id}_{assay_type}_{YYYYMMDD_HHMMSS}_step{N}.json`
+```bash
+# Install dependencies
+pip install -r requirements.txt
 
----
+# Run web server (primary entry point)
+uvicorn web.app:app --host 0.0.0.0 --port 8000
 
-## 3. Skill Invocation Order (STEP 1–7)
+# Run file watcher (monitors input/raw/ for new CSVs)
+python watchdog_runner.py
 
-| Step | Skill           | Script / Reference                        | Action                                                    |
-|------|-----------------|-------------------------------------------|-----------------------------------------------------------|
-| 1    | file-receiver   | scripts/receive_file.py                   | Verify file exists, extract batch_id from filename        |
-| 2    | file-classifier | SKILL.md + references/column_patterns.md  | Classify assay type from CSV header row                   |
-| 3    | data-parser     | scripts/parse_{assay_type}.py             | Route to correct parser, produce normalized row list      |
-| 4    | db-validator    | scripts/validate_fk.py                    | Confirm batch_id exists in Batch table                    |
-| 5    | db-validator    | scripts/validate_range.py                 | Apply validation_rules.yaml, add validation_flag per row  |
-| 6    | db-writer       | scripts/write_db.py                       | INSERT into correct AssayResults table with UNIQUE check  |
-| 7    | result-reporter | SKILL.md + references/report_format.md    | Generate Markdown summary, write to output/logs/          |
+# Run pipeline manually on a single file
+python -c "from pipeline import run_pipeline; run_pipeline('input/raw/BATCH_assay_DATE.csv')"
 
----
-
-## 4. FK Dependency Enforcement
-
-The database enforces this hierarchy — each level must exist before the next:
-
-```
-Material
-  └── Formulation  (FK: ionizable_lipid_id, helper_lipid_id, sterol_id, peg_lipid_id → Material)
-        └── Batch  (FK: formulation_id → Formulation)
-              ├── AssayResults_Physical  (FK: batch_id → Batch)
-              ├── InVivo_study           (FK: batch_id → Batch)
-              │     ├── InVivo_FLUC      (FK: study_id → InVivo_study)
-              │     └── InVivo_EPO       (FK: study_id → InVivo_study)
-              └── Toxicity               (FK: batch_id → Batch)
+# Export all data to Excel
+python -c "from importlib.util import spec_from_file_location, module_from_spec; s=spec_from_file_location('e','.claude/skills/db-writer/scripts/export_excel.py'); m=module_from_spec(s); s.loader.exec_module(m); m.export_to_excel('output/lnp_data.db','output/exports/export.xlsx')"
 ```
 
-- STEP 4 checks `batch_id` exists in `Batch` table.
-- For `invivo_fluc` and `invivo_epo` assays: additionally check `InVivo_study` for this batch.
-  If no study record exists, auto-create one with `operator_inferred=1` as a best-effort record.
-- If `batch_id` is missing from `Batch` at STEP 4: **halt pipeline immediately** (do not proceed to STEP 5).
+No test framework is configured. No linter or formatter is configured.
 
----
+## Architecture
 
-## 5. Escalation Criteria
+### Pipeline (7-step sequential)
 
-| Condition            | Action                                                                                           |
-|----------------------|--------------------------------------------------------------------------------------------------|
-| FK missing (STEP 4)  | Log `FK_MISSING: batch_id {x} not found in Batch table`. Halt. Emit SSE `pipeline_halted`.     |
-| Classification fail  | Log `CLASSIFY_FAIL`. Move file to `input/raw/unclassified/`. Halt. Emit SSE `pipeline_halted`.  |
-| Parse error          | Log `PARSE_ERROR: {detail}`. Halt. Report partial result if available. Emit SSE error.          |
-| Range violation      | **Do not halt.** Set `validation_flag[field] = "WARN: {value} {reason}"`. Continue to STEP 6.  |
-| Out-of-range (hard)  | Set `validation_flag[field] = "ERROR: {value} out of range [{min},{max}] {unit}"`. Continue.   |
+`pipeline.py` orchestrates all processing via dynamic imports (`importlib`). Each step reads the previous step's JSON from `output/tmp/` and writes its own. SSE events are emitted at each transition for the web UI.
 
----
+| Step | Skill | Script | Halts on error? |
+|------|-------|--------|-----------------|
+| 1 | file-receiver | `receive_file.py` | Yes |
+| 2 | file-classifier | `classify_file.py` | Yes (moves file to `input/raw/unclassified/`) |
+| 3 | data-parser | `parse_{assay_type}.py` | Yes |
+| 4 | db-validator | `validate_fk.py` | Yes (FK missing) |
+| 5 | db-validator | `validate_range.py` | Never (flags only) |
+| 6 | db-writer | `write_db.py` | On DB lock after retries |
+| 7 | result-reporter | `generate_report.py` | Never |
 
-## 6. Intermediate File Rules
+All skill scripts live under `.claude/skills/{skill-name}/scripts/`.
 
-- Location: `output/tmp/`
-- Naming: `{batch_id}_{assay_type}_{YYYYMMDD_HHMMSS}_step{N}.json`
-- Each step reads the previous step's JSON and writes its own.
-- Temp files are **not** deleted automatically; scheduled purge or manual cleanup required.
-- JSON schemas are defined in each skill's SKILL.md.
+### Supported Assay Types
 
----
+- `physical` — Zetasizer, NanoSight, ZetaView (size, PDI, zeta potential, encapsulation)
+- `invivo_fluc` — LivingImage bioluminescence (total flux, radiance)
+- `invivo_epo` — SpectraMax ELISA (OD450, EPO pg/mL)
+- `toxicity` — Fuji/Hitachi/VetScan blood chemistry (ALT, AST, BUN, creatinine)
 
-## 7. Validation Rule Reference
+### CSV Filename Convention
 
-- File: `config/validation_rules.yaml`
-- Applied at **STEP 5 only**.
-- Format per field: `{min}`, `{max}`, `{unit}`, `{warn_threshold}` (optional), `{warn_only: bool}`
-- If rules file is missing: log warning, skip range check, continue (fail-open behavior).
+`{batch_id}_{assay_type}_{YYYYMMDD}.csv` — e.g. `LNP-2024-001_physical_20240315.csv`
 
----
+### Database (SQLite)
 
-## 8. Database
+Path: `output/lnp_data.db`. Every connection must set `PRAGMA journal_mode=WAL` and `PRAGMA foreign_keys=ON`.
 
-- Path: `output/lnp_data.db`
-- Mode: WAL (`PRAGMA journal_mode=WAL`) — set on every connection open
-- FK enforcement: `PRAGMA foreign_keys=ON` — set on every connection open
-- Schema is initialized by `db-writer/scripts/write_db.py` (`CREATE TABLE IF NOT EXISTS`)
-- No migration tool: schema changes require manual `ALTER TABLE`
+FK hierarchy (each level must exist before the next):
+```
+Material → Formulation → Batch → AssayResults_Physical / InVivo_study / Toxicity
+                                   InVivo_study → InVivo_FLUC / InVivo_EPO
+```
 
----
+Schema is auto-created by `write_db.py` (`CREATE TABLE IF NOT EXISTS`). No migration tool — schema changes require manual `ALTER TABLE`.
 
-## 9. Prohibited Actions
+All inserts use `INSERT OR IGNORE` for UNIQUE deduplication. For in-vivo assays, if no `InVivo_study` exists for the batch, one is auto-created with `operator_inferred=1`.
 
-- **NEVER** overwrite or delete files in `input/raw/` (exception: move to `unclassified/` subdirectory)
-- **NEVER** write raw binary blobs into SQLite
-- **NEVER** skip STEP 4 FK check, even if batch_id appears correct
-- **NEVER** INSERT without a UNIQUE conflict check (`INSERT OR IGNORE`) — log when a row is skipped
+### Web Interface
+
+- `web/app.py` — FastAPI with SSE streaming for pipeline progress
+- `web/static/index.html` — Single-page app (Upload, Batches, Logs, Export tabs)
+- Key endpoints: `POST /upload`, `GET /progress/{run_id}`, `GET /batches`, `GET /results/{batch_id}`, `POST /export`, `GET /logs`
+
+### Key Design Patterns
+
+- **Column aliasing**: Each parser has a `COLUMN_MAP` dict mapping 20+ instrument-specific column names to normalized DB field names
+- **Encoding fallback**: CSV reading tries UTF-8 → cp949 → latin-1
+- **Classification confidence**: HIGH (100% match), MEDIUM (60-99%), LOW (<60% = failure)
+- **Intermediate JSON**: `output/tmp/{batch_id}_{assay_type}_{timestamp}_step{N}.json` — not auto-cleaned
+- **Validation rules**: `config/validation_rules.yaml` — numeric min/max/warn_threshold per field, applied at step 5 only. Missing rules file = fail-open (skip checks)
+- **Reference files**: `column_patterns.md` (instrument signatures) and `report_format.md` (log template) guide classifier and reporter skills
+
+## Operational Rules
+
+- **NEVER** overwrite or delete files in `input/raw/` (exception: move to `unclassified/` on classification failure)
+- **NEVER** skip the FK check at step 4
+- **NEVER** INSERT without UNIQUE conflict check — log when a row is skipped
 - **NEVER** push to `main` branch directly
-
----
-
-## 10. Web Interface
-
-- Entry point: `web/app.py` (FastAPI)
-- Default port: `8000`
-- Static frontend: `web/static/index.html`
-- Start: `uvicorn web.app:app --host 0.0.0.0 --port 8000`
-- API endpoints:
-  - `POST /upload` — accept CSV, trigger pipeline
-  - `GET /progress/{run_id}` — SSE stream of step-by-step progress
-  - `GET /batches` — list all Batch records
-  - `GET /results/{batch_id}` — all assay results for a batch
-  - `POST /export` — trigger Excel export, return file download
-  - `GET /logs` — list available run log files
-  - `GET /logs/{filename}` — return log file content
-
----
-
-## 11. Skills Directory
-
-All skill definitions live under `.claude/skills/`:
-
-```
-.claude/skills/
-├── file-receiver/
-│   ├── SKILL.md
-│   └── scripts/receive_file.py
-├── file-classifier/
-│   ├── SKILL.md
-│   └── references/column_patterns.md
-├── data-parser/
-│   ├── SKILL.md
-│   └── scripts/
-│       ├── parse_physical.py
-│       ├── parse_invivo_fluc.py
-│       ├── parse_invivo_epo.py
-│       └── parse_toxicity.py
-├── db-validator/
-│   ├── SKILL.md
-│   └── scripts/
-│       ├── validate_fk.py
-│       └── validate_range.py
-├── db-writer/
-│   ├── SKILL.md
-│   └── scripts/
-│       ├── write_db.py
-│       └── export_excel.py
-└── result-reporter/
-    ├── SKILL.md
-    └── references/report_format.md
-```
-
----
-
-## 12. Git Operations
-
-- Branch: `claude/build-data-agent-nLjJo`
-- Always push with: `git push -u origin claude/build-data-agent-nLjJo`
-- On network failure: retry up to 4 times with exponential backoff (2s → 4s → 8s → 16s)
-- Never force-push without explicit user permission
-- Never push to `main` directly
+- Range violations at step 5 produce WARN/ERROR flags but never halt the pipeline
+- FK violations at step 4 always halt the pipeline immediately
